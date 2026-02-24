@@ -19,6 +19,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+import uuid
+import time
+
 UPLOAD_DIR = "uploads"
 OUTPUT_DIR = "outputs"
 MODEL_PATH = "models/levir_pretrained.pth"
@@ -61,20 +64,37 @@ def create_mask(pred, output_path):
 
     cv2.imwrite(output_path, mask)
 
+# helper to create a unique filename preserving the original extension
+
+def make_unique_filename(original_name: str) -> str:
+    _, ext = os.path.splitext(original_name)
+    if not ext:
+        ext = ".png"
+    return f"{uuid.uuid4().hex}{ext}"
+
+
 @app.post("/predict")
 async def predict(
     image_before: UploadFile = File(...),
     image_after: UploadFile = File(...)
 ):
-    before_path = os.path.join(UPLOAD_DIR, image_before.filename)
-    after_path = os.path.join(UPLOAD_DIR, image_after.filename)
+    # create unique names even if the user uploads two files with the same
+    # original name; this also helps prevent caching problems in the browser
+    before_filename = make_unique_filename(image_before.filename)
+    after_filename = make_unique_filename(image_after.filename)
+    before_path = os.path.join(UPLOAD_DIR, before_filename)
+    after_path = os.path.join(UPLOAD_DIR, after_filename)
 
-    with open(before_path, "wb") as f:
-        f.write(await image_before.read())
+    # save the files to disk; if anything goes wrong return an error JSON
+    try:
+        with open(before_path, "wb") as f:
+            f.write(await image_before.read())
+        with open(after_path, "wb") as f:
+            f.write(await image_after.read())
+    except Exception as e:
+        return {"error": f"Unable to write files: {e}"}
 
-    with open(after_path, "wb") as f:
-        f.write(await image_after.read())
-
+    # run preprocessing and inference
     img1 = preprocess(before_path)
     img2 = preprocess(after_path)
 
@@ -83,11 +103,16 @@ async def predict(
 
     print("LOGIT MIN:", prediction.min().item())
     print("LOGIT MAX:", prediction.max().item())
-    output_path = os.path.join(OUTPUT_DIR, "mask.png")
+
+    # save the mask with a unique name so previous outputs are never
+    # overwritten
+    mask_filename = make_unique_filename("mask.png")
+    output_path = os.path.join(OUTPUT_DIR, mask_filename)
     create_mask(prediction, output_path)
 
+    # return relative URLs; frontend may append a timestamp to bust cache
     return {
-        "before_image": f"uploads/{image_before.filename}",
-        "after_image": f"uploads/{image_after.filename}",
-        "mask": "outputs/mask.png"
+        "before_image": f"uploads/{before_filename}",
+        "after_image": f"uploads/{after_filename}",
+        "mask": f"outputs/{mask_filename}",
     }
