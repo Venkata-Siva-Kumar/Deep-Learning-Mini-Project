@@ -1,6 +1,8 @@
 # Python
 __pycache__/
 *.pyc
+backend/uploads/
+backend/outputs/
 
 # Node
 node_modules/

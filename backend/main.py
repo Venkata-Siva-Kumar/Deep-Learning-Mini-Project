@@ -1,17 +1,20 @@
+import io
 import os
-import torch
+import uuid
+import zipfile
+from threading import Lock
+
+os.environ.setdefault("CUDA_VISIBLE_DEVICES", "")
+
 import cv2
 import numpy as np
+import torch
 from fastapi import FastAPI, File, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
-from model import Hybrid
-import zipfile
-import io
 from fastapi.responses import StreamingResponse
+from fastapi.staticfiles import StaticFiles
 
-# ✅ THIS MUST EXIST
-import uuid
+from model import Hybrid
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -33,6 +36,10 @@ UPLOAD_DIR = resolve_path(os.getenv("UPLOAD_DIR", "uploads"))
 OUTPUT_DIR = resolve_path(os.getenv("OUTPUT_DIR", "outputs"))
 MODEL_PATH = resolve_path(os.getenv("MODEL_PATH", "models/levir_pretrained.pth"))
 CORS_ORIGINS = parse_cors_origins()
+TARGET_SIZE = int(os.getenv("MODEL_INPUT_SIZE", "512"))
+
+_MODEL = None
+_MODEL_LOCK = Lock()
 
 # This must be initialized before routes are registered.
 app = FastAPI()
@@ -53,28 +60,50 @@ app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
 app.mount("/outputs", StaticFiles(directory=OUTPUT_DIR), name="outputs")
 
 
-# Load model
-if not os.path.exists(MODEL_PATH):
-    raise FileNotFoundError(f"Model file not found: {MODEL_PATH}")
+def load_checkpoint(path_value: str):
+    try:
+        return torch.load(path_value, map_location="cpu", weights_only=True)
+    except TypeError:
+        return torch.load(path_value, map_location="cpu")
 
-model = Hybrid()
-model.load_state_dict(torch.load(MODEL_PATH, map_location="cpu"))
-model.eval()
 
-print("Model loaded successfully!")
+def get_model() -> Hybrid:
+    global _MODEL
+
+    if _MODEL is not None:
+        return _MODEL
+
+    with _MODEL_LOCK:
+        if _MODEL is not None:
+            return _MODEL
+
+        if not os.path.exists(MODEL_PATH):
+            raise FileNotFoundError(f"Model file not found: {MODEL_PATH}")
+
+        model = Hybrid()
+        model.load_state_dict(load_checkpoint(MODEL_PATH))
+        model.eval()
+        _MODEL = model
+        print(f"Model loaded successfully from {MODEL_PATH}")
+
+    return _MODEL
+
 
 @app.get("/")
 def home():
-    return {"message": "Building Change Detection API is Running 🚀"}
+    return {"message": "Building Change Detection API is running"}
+
 
 @app.get("/health")
 def health():
-    return {"status": "ok"}
+    return {"status": "ok", "model_loaded": _MODEL is not None}
 
 
-# Preprocess
-def preprocess(image_path, target_size=512):
+def preprocess(image_path, target_size=TARGET_SIZE):
     img = cv2.imread(image_path)
+    if img is None:
+        raise ValueError(f"Unable to read image: {image_path}")
+
     orig_h, orig_w = img.shape[:2]
     scale = target_size / max(orig_h, orig_w)
     resized_w = int(orig_w * scale)
@@ -95,19 +124,18 @@ def preprocess(image_path, target_size=512):
         pad_left,
         pad_right,
         cv2.BORDER_CONSTANT,
-        value=(0, 0, 0)
+        value=(0, 0, 0),
     )
 
     img_rgb = cv2.cvtColor(img_padded, cv2.COLOR_BGR2RGB)
-    img_rgb = img_rgb / 255.0
-    img_tensor = torch.tensor(img_rgb).permute(2, 0, 1).float().unsqueeze(0)
+    img_rgb = np.ascontiguousarray(img_rgb.transpose(2, 0, 1), dtype=np.float32) / 255.0
+    img_tensor = torch.from_numpy(img_rgb).unsqueeze(0)
 
     return img_tensor, (orig_h, orig_w), (pad_top, pad_left), (resized_h, resized_w)
 
-# Postprocess
-def create_mask(pred, output_path, orig_shape, pad, resized_shape):
 
-    # 🔥 amplify logits
+def create_mask(pred, output_path, orig_shape, pad, resized_shape):
+    # Amplify logits slightly so subtle change regions are easier to threshold.
     pred = torch.sigmoid(pred * 6)
 
     mask = pred.squeeze().detach().cpu().numpy()
@@ -120,7 +148,6 @@ def create_mask(pred, output_path, orig_shape, pad, resized_shape):
 
     cv2.imwrite(output_path, mask_resized)
 
-# helper to create a unique filename preserving the original extension
 
 def make_unique_filename(original_name: str) -> str:
     _, ext = os.path.splitext(original_name)
@@ -132,41 +159,41 @@ def make_unique_filename(original_name: str) -> str:
 @app.post("/predict")
 async def predict(
     image_before: UploadFile = File(...),
-    image_after: UploadFile = File(...)
+    image_after: UploadFile = File(...),
 ):
-    # create unique names even if the user uploads two files with the same
-    # original name; this also helps prevent caching problems in the browser
-    before_filename = make_unique_filename(image_before.filename)
-    after_filename = make_unique_filename(image_after.filename)
+    before_filename = make_unique_filename(image_before.filename or "before.png")
+    after_filename = make_unique_filename(image_after.filename or "after.png")
     before_path = os.path.join(UPLOAD_DIR, before_filename)
     after_path = os.path.join(UPLOAD_DIR, after_filename)
 
-    # save the files to disk; if anything goes wrong return an error JSON
     try:
-        with open(before_path, "wb") as f:
-            f.write(await image_before.read())
-        with open(after_path, "wb") as f:
-            f.write(await image_after.read())
-    except Exception as e:
-        return {"error": f"Unable to write files: {e}"}
+        before_bytes = await image_before.read()
+        after_bytes = await image_after.read()
 
-    # run preprocessing and inference
-    img1, orig_shape, pad, resized_shape = preprocess(before_path)
-    img2, _, _, _ = preprocess(after_path)
+        with open(before_path, "wb") as file_handle:
+            file_handle.write(before_bytes)
+        with open(after_path, "wb") as file_handle:
+            file_handle.write(after_bytes)
+    except Exception as exc:
+        return {"error": f"Unable to write files: {exc}"}
 
-    with torch.no_grad():
-        prediction = model(img1, img2)
+    try:
+        img1, orig_shape, pad, resized_shape = preprocess(before_path)
+        img2, _, _, _ = preprocess(after_path)
+        model = get_model()
+
+        with torch.inference_mode():
+            prediction = model(img1, img2)
+    except Exception as exc:
+        return {"error": f"Inference failed: {exc}"}
 
     print("LOGIT MIN:", prediction.min().item())
     print("LOGIT MAX:", prediction.max().item())
 
-    # save the mask with a unique name so previous outputs are never
-    # overwritten
     mask_filename = make_unique_filename("mask.png")
     output_path = os.path.join(OUTPUT_DIR, mask_filename)
     create_mask(prediction, output_path, orig_shape, pad, resized_shape)
 
-    # return relative URLs; frontend may append a timestamp to bust cache
     return {
         "before_image": f"uploads/{before_filename}",
         "after_image": f"uploads/{after_filename}",
@@ -176,55 +203,52 @@ async def predict(
 
 @app.post("/download-results")
 async def download_results(data: dict):
-    """
-    Create a zip file containing the analysis results
-    """
     try:
-        # Create a zip file in memory
         zip_buffer = io.BytesIO()
 
-        with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
-            # Add images to zip
-            if data.get('t1Image'):
-                # Extract filename from URL
-                t1_filename = data['t1Image'].split('/')[-1]
+        with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
+            if data.get("t1Image"):
+                t1_filename = data["t1Image"].split("/")[-1]
                 t1_path = os.path.join(UPLOAD_DIR, t1_filename)
                 if os.path.exists(t1_path):
                     zip_file.write(t1_path, f"T1_Image_{t1_filename}")
 
-            if data.get('t2Image'):
-                t2_filename = data['t2Image'].split('/')[-1]
+            if data.get("t2Image"):
+                t2_filename = data["t2Image"].split("/")[-1]
                 t2_path = os.path.join(UPLOAD_DIR, t2_filename)
                 if os.path.exists(t2_path):
                     zip_file.write(t2_path, f"T2_Image_{t2_filename}")
 
-            if data.get('maskImage'):
-                mask_filename = data['maskImage'].split('/')[-1]
+            if data.get("maskImage"):
+                mask_filename = data["maskImage"].split("/")[-1]
                 mask_path = os.path.join(OUTPUT_DIR, mask_filename)
                 if os.path.exists(mask_path):
                     zip_file.write(mask_path, f"Change_Mask_{mask_filename}")
 
-            # Add a summary text file
             summary_content = f"""Building Change Detection Analysis Summary
-Generated on: {data.get('timestamp', 'Unknown')}
+Generated on: {data.get("timestamp", "Unknown")}
 
 Analysis Results:
-- T1 Image: {data.get('t1Image', 'N/A')}
-- T2 Image: {data.get('t2Image', 'N/A')}
-- Change Mask: {data.get('maskImage', 'N/A')}
+- T1 Image: {data.get("t1Image", "N/A")}
+- T2 Image: {data.get("t2Image", "N/A")}
+- Change Mask: {data.get("maskImage", "N/A")}
 
 This zip file contains the original images and the generated change detection mask.
 """
-            zip_file.writestr('analysis_summary.txt', summary_content)
+            zip_file.writestr("analysis_summary.txt", summary_content)
 
         zip_buffer.seek(0)
 
-        # Return the zip file
         return StreamingResponse(
             zip_buffer,
-            media_type='application/zip',
-            headers={"Content-Disposition": f"attachment; filename=building-change-analysis-{data.get('timestamp', 'unknown').split('T')[0]}.zip"}
+            media_type="application/zip",
+            headers={
+                "Content-Disposition": (
+                    f"attachment; filename=building-change-analysis-"
+                    f"{data.get('timestamp', 'unknown').split('T')[0]}.zip"
+                )
+            },
         )
 
-    except Exception as e:
-        return {"error": f"Failed to create download: {str(e)}"}
+    except Exception as exc:
+        return {"error": f"Failed to create download: {exc}"}

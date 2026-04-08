@@ -30,6 +30,8 @@ venv\Scripts\activate           # Windows
 pip install -r requirements.txt
 ```
 
+For Render deployment, use `requirements.render.txt` instead so the service installs CPU-only PyTorch wheels.
+
 ## Running the Application
 
 ### Frontend

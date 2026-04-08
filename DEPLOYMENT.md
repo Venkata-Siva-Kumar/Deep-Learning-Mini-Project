@@ -29,13 +29,14 @@ If you want everything in one dashboard, you can also host both parts on Render.
 
 - Root Directory: `backend`
 - Environment: `Python`
-- Build Command: `pip install -r requirements.txt`
+- Build Command: `pip install -r requirements.render.txt`
 - Start Command: `uvicorn main:app --host 0.0.0.0 --port $PORT`
 
 4. Add these environment variables:
 
 - `CORS_ORIGINS=https://your-frontend-domain.vercel.app`
 - `MODEL_PATH=models/levir_pretrained.pth`
+- `MODEL_INPUT_SIZE=512`
 - `UPLOAD_DIR=uploads`
 - `OUTPUT_DIR=outputs`
 
@@ -44,6 +45,12 @@ If you want everything in one dashboard, you can also host both parts on Render.
 
 - `https://your-render-service.onrender.com/`
 - `https://your-render-service.onrender.com/health`
+
+Notes for Render:
+
+- `requirements.render.txt` forces the CPU-only PyTorch wheels so Render does not install the much larger CUDA packages.
+- The app now loads the model lazily, so `/health` can return `"model_loaded": false` before the first prediction. That is expected.
+- If you still hit memory pressure on the starter instance, try `MODEL_INPUT_SIZE=384` first or move to a larger instance.
 
 ## Step 2: Deploy the Frontend on Vercel
 
@@ -76,6 +83,6 @@ After Vercel gives you the real frontend URL:
 
 ## Important Notes
 
-- This backend uses CPU inference by default. PyTorch + OpenCV may need a paid Render instance for stable memory usage.
+- This backend uses CPU inference by default, but PyTorch is still memory-heavy enough that the smallest Render instances can be tight.
 - Uploaded images and generated masks are written to local service storage. That is okay for a simple deployment, but for long-term production you should move these files to object storage such as AWS S3 or Cloudinary.
-- If the backend feels slow or runs out of memory, move to a larger Render instance or a VM with more RAM.
+- If the backend feels slow or runs out of memory, lower `MODEL_INPUT_SIZE` or move to a larger Render instance or VM.
