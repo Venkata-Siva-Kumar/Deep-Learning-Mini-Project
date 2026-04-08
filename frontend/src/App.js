@@ -16,6 +16,19 @@ function App() {
   const [showResults, setShowResults] = useState(false);
   const [error, setError] = useState(null);
 
+  useEffect(() => {
+    const controller = new AbortController();
+
+    fetch(`${API_BASE_URL}/warmup`, {
+      method: 'POST',
+      signal: controller.signal,
+    }).catch(() => {
+      // Render can be asleep on first visit; failing silently keeps the page responsive.
+    });
+
+    return () => controller.abort();
+  }, []);
+
   // Loading animation steps
   useEffect(() => {
     if (isLoading) {
@@ -150,21 +163,31 @@ function App() {
       }
 
       const maskUrl = `${API_BASE_URL}/${data.mask}`;
-      const fallbackStats = await computeMaskStats(maskUrl);
 
       // Calculate processing time
       const endTime = performance.now();
       const processingTime = ((endTime - startTime) / 1000).toFixed(1);
       
       const backendStats = data.stats || {};
-      const buildingsDetected = backendStats.buildingsDetected ?? fallbackStats.buildingsDetected;
-      const changesFound = backendStats.changesFound ?? fallbackStats.changesFound;
-      const confidenceScore = backendStats.confidenceScore ?? fallbackStats.confidenceScore;
+      let fallbackStats = null;
+
+      if (
+        backendStats.buildingsDetected == null ||
+        backendStats.changesFound == null ||
+        backendStats.confidenceScore == null
+      ) {
+        fallbackStats = await computeMaskStats(maskUrl);
+      }
+
+      const buildingsDetected = backendStats.buildingsDetected ?? fallbackStats?.buildingsDetected ?? 0;
+      const changesFound = backendStats.changesFound ?? fallbackStats?.changesFound ?? 0;
+      const confidenceScore = backendStats.confidenceScore ?? fallbackStats?.confidenceScore ?? 40;
       
       setResult({
         t1Image: `${API_BASE_URL}/${data.before_image}`,
         t2Image: `${API_BASE_URL}/${data.after_image}`,
         changeMask: maskUrl,
+        downloadUrl: data.download ? `${API_BASE_URL}/${data.download}` : null,
         stats: {
           buildingsDetected,
           changesFound,
@@ -342,7 +365,7 @@ function App() {
             <InfoCard
               icon={Zap}
               title="Fast Processing"
-              description="Get results in seconds with our optimized GPU-accelerated inference pipeline"
+              description="Get results in seconds with our optimized inference pipeline"
               color="green"
             />
           </motion.div>

@@ -25,6 +25,16 @@ const ResultViewer = ({ result, onClose }) => {
   ];
 
   const handleDownload = async () => {
+    if (result?.downloadUrl) {
+      const link = document.createElement('a');
+      link.href = result.downloadUrl;
+      link.download = `building-change-analysis-${new Date().toISOString().split('T')[0]}.zip`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      return;
+    }
+
     try {
       // Create a zip file or download individual files
       const response = await fetch(`${API_BASE_URL}/download-results`, {

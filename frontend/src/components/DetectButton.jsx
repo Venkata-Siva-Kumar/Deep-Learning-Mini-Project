@@ -4,8 +4,8 @@ import { Scan, Loader2, CheckCircle, Sparkles } from 'lucide-react';
 
 const DetectButton = ({ onClick, disabled, isLoading, loadingStep }) => {
   const loadingMessages = [
+    'Preparing Model...',
     'Analyzing Temporal Changes...',
-    'Running SCASN Model...',
     'Generating Change Mask...',
   ];
 

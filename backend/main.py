@@ -2,6 +2,7 @@ import io
 import os
 import uuid
 import zipfile
+from datetime import datetime, timezone
 from threading import Lock
 
 os.environ.setdefault("CUDA_VISIBLE_DEVICES", "")
@@ -9,9 +10,9 @@ os.environ.setdefault("CUDA_VISIBLE_DEVICES", "")
 import cv2
 import numpy as np
 import torch
-from fastapi import FastAPI, File, UploadFile
+from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from model import Hybrid
@@ -34,6 +35,7 @@ def parse_cors_origins() -> list[str]:
 
 UPLOAD_DIR = resolve_path(os.getenv("UPLOAD_DIR", "uploads"))
 OUTPUT_DIR = resolve_path(os.getenv("OUTPUT_DIR", "outputs"))
+DOWNLOAD_DIR = resolve_path(os.getenv("DOWNLOAD_DIR", "downloads"))
 MODEL_PATH = resolve_path(os.getenv("MODEL_PATH", "models/levir_pretrained.pth"))
 CORS_ORIGINS = parse_cors_origins()
 TARGET_SIZE = int(os.getenv("MODEL_INPUT_SIZE", "512"))
@@ -55,6 +57,7 @@ app.add_middleware(
 
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 os.makedirs(OUTPUT_DIR, exist_ok=True)
+os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
 app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
 app.mount("/outputs", StaticFiles(directory=OUTPUT_DIR), name="outputs")
@@ -97,6 +100,12 @@ def home():
 @app.get("/health")
 def health():
     return {"status": "ok", "model_loaded": _MODEL is not None}
+
+
+@app.post("/warmup")
+def warmup():
+    get_model()
+    return {"status": "ok", "model_loaded": True}
 
 
 def preprocess(image_path, target_size=TARGET_SIZE):
@@ -147,6 +156,39 @@ def create_mask(pred, output_path, orig_shape, pad, resized_shape):
     mask_resized = cv2.resize(mask_cropped, (orig_shape[1], orig_shape[0]), interpolation=cv2.INTER_NEAREST)
 
     cv2.imwrite(output_path, mask_resized)
+    return mask_resized
+
+
+def calculate_mask_stats(mask: np.ndarray) -> dict:
+    binary_mask = (mask > 127).astype(np.uint8)
+    total_pixels = binary_mask.size
+    white_pixel_count = int(binary_mask.sum())
+    changes_found = round((white_pixel_count / total_pixels) * 100) if total_pixels > 0 else 0
+
+    num_labels, _, component_stats, _ = cv2.connectedComponentsWithStats(binary_mask, connectivity=8)
+    buildings_detected = 0
+    if num_labels > 1:
+        building_areas = component_stats[1:, cv2.CC_STAT_AREA]
+        buildings_detected = int(np.count_nonzero(building_areas >= 16))
+
+    normalized_area = white_pixel_count / max(total_pixels, 1)
+    confidence_score = (
+        40
+        if white_pixel_count == 0
+        else min(
+            100,
+            max(
+                50,
+                round(80 - abs(0.12 - normalized_area) * 100 + min(10, buildings_detected)),
+            ),
+        )
+    )
+
+    return {
+        "buildingsDetected": buildings_detected,
+        "changesFound": changes_found,
+        "confidenceScore": confidence_score,
+    }
 
 
 def make_unique_filename(original_name: str) -> str:
@@ -154,6 +196,29 @@ def make_unique_filename(original_name: str) -> str:
     if not ext:
         ext = ".png"
     return f"{uuid.uuid4().hex}{ext}"
+
+
+def create_results_zip(before_path: str, after_path: str, mask_path: str) -> str:
+    timestamp = datetime.now(timezone.utc).isoformat()
+    archive_name = f"building-change-analysis-{uuid.uuid4().hex}.zip"
+    archive_path = os.path.join(DOWNLOAD_DIR, archive_name)
+
+    with zipfile.ZipFile(archive_path, "w", compression=zipfile.ZIP_STORED) as zip_file:
+        zip_file.write(before_path, f"T1_Image_{os.path.basename(before_path)}")
+        zip_file.write(after_path, f"T2_Image_{os.path.basename(after_path)}")
+        zip_file.write(mask_path, f"Change_Mask_{os.path.basename(mask_path)}")
+
+        summary_content = f"""Building Change Detection Analysis Summary
+Generated on: {timestamp}
+
+Files:
+- T1 Image: {os.path.basename(before_path)}
+- T2 Image: {os.path.basename(after_path)}
+- Change Mask: {os.path.basename(mask_path)}
+"""
+        zip_file.writestr("analysis_summary.txt", summary_content)
+
+    return archive_name
 
 
 @app.post("/predict")
@@ -192,13 +257,32 @@ async def predict(
 
     mask_filename = make_unique_filename("mask.png")
     output_path = os.path.join(OUTPUT_DIR, mask_filename)
-    create_mask(prediction, output_path, orig_shape, pad, resized_shape)
+    mask = create_mask(prediction, output_path, orig_shape, pad, resized_shape)
+    stats = calculate_mask_stats(mask)
+    download_filename = create_results_zip(before_path, after_path, output_path)
 
     return {
         "before_image": f"uploads/{before_filename}",
         "after_image": f"uploads/{after_filename}",
         "mask": f"outputs/{mask_filename}",
+        "download": f"download/{download_filename}",
+        "stats": stats,
     }
+
+
+@app.get("/download/{archive_name}")
+def download_archive(archive_name: str):
+    safe_name = os.path.basename(archive_name)
+    archive_path = os.path.join(DOWNLOAD_DIR, safe_name)
+
+    if not os.path.exists(archive_path):
+        raise HTTPException(status_code=404, detail="Download archive not found")
+
+    return FileResponse(
+        archive_path,
+        media_type="application/zip",
+        filename=safe_name,
+    )
 
 
 @app.post("/download-results")
@@ -206,7 +290,7 @@ async def download_results(data: dict):
     try:
         zip_buffer = io.BytesIO()
 
-        with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
+        with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_STORED) as zip_file:
             if data.get("t1Image"):
                 t1_filename = data["t1Image"].split("/")[-1]
                 t1_path = os.path.join(UPLOAD_DIR, t1_filename)

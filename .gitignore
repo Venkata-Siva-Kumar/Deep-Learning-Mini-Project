@@ -3,6 +3,7 @@ __pycache__/
 *.pyc
 backend/uploads/
 backend/outputs/
+backend/downloads/
 
 # Node
 node_modules/
