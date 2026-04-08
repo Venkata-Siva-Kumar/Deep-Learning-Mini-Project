@@ -89,4 +89,4 @@ class Hybrid(nn.Module):
 
         out = self.final(x)
 
-        return F.interpolate(out,size=(256,256),mode='bilinear')
+        return F.interpolate(out,size=(512,512),mode='bilinear')
