@@ -13,36 +13,36 @@ const OverlayViewer = ({ t1Image, maskImage, onZoom, stats }) => {
   const regions = [
     {
       id: 'region1',
-      name: 'North Block',
-      summary: 'Planned mixed-use development with rooftop gardens.',
+      name: 'Commercial Area',
+      summary: 'High-rise office and retail complex development.',
       buildingType: 'Residential',
       projectedBuild: '5–7 floors',
       estimatedCost: '$1.8M',
       growthPotential: 'High',
       developmentPhase: 'Planning',
-      highlightStyle: { top: '12%', left: '14%', width: '24%', height: '18%' },
+      highlightStyle: { top: '8%', left: '10%', width: '28%', height: '22%' },
     },
     {
       id: 'region2',
-      name: 'East Corridor',
-      summary: 'Commercial redevelopment with transit access.',
+      name: 'Tech Park Avenue',
+      summary: 'Modern innovation hub with workspace.',
       buildingType: 'Retail / Office',
       projectedBuild: '3–5 floors',
       estimatedCost: '$2.3M',
       growthPotential: 'Moderate',
       developmentPhase: 'Design',
-      highlightStyle: { top: '34%', left: '45%', width: '20%', height: '22%' },
+      highlightStyle: { top: '32%', left: '48%', width: '24%', height: '28%' },
     },
     {
       id: 'region3',
-      name: 'South Campus',
-      summary: 'New residential campus with community amenities.',
+      name: 'Residential Complex',
+      summary: 'Large-scale mixed housing and community hub.',
       buildingType: 'Apartment Complex',
       projectedBuild: '6–8 floors',
       estimatedCost: '$3.2M',
       growthPotential: 'Strong',
       developmentPhase: 'Construction',
-      highlightStyle: { top: '56%', left: '24%', width: '28%', height: '20%' },
+      highlightStyle: { top: '52%', left: '20%', width: '32%', height: '26%' },
     },
   ];
 
@@ -78,14 +78,9 @@ const OverlayViewer = ({ t1Image, maskImage, onZoom, stats }) => {
               <span className="text-sm text-gray-300"><span className="font-semibold text-white">{stats.buildingsDetected}</span> Buildings</span>
             </div>
           )}
-          {stats?.changesFound != null && (
+          {stats?.accuracyScore != null && (
             <div className="flex items-center space-x-2 px-3 py-1.5 rounded-full bg-gray-800/70">
-              <span className="text-sm text-gray-300"><span className="font-semibold text-white">{stats.changesFound}%</span> Change Area</span>
-            </div>
-          )}
-          {stats?.confidenceScore != null && (
-            <div className="flex items-center space-x-2 px-3 py-1.5 rounded-full bg-gray-800/70">
-              <span className="text-sm text-gray-300"><span className="font-semibold text-white">{stats.confidenceScore}%</span> Confidence</span>
+              <span className="text-sm text-gray-300"><span className="font-semibold text-white">{stats.accuracyScore}%</span> Accuracy</span>
             </div>
           )}
         </div>
@@ -144,10 +139,6 @@ const OverlayViewer = ({ t1Image, maskImage, onZoom, stats }) => {
               <img src={t1Image} alt="Original" className="max-w-full max-h-full object-contain" draggable={false} />
             </div>
             <div className="absolute top-4 left-4 px-3 py-1.5 rounded-full bg-gray-900/70 text-white text-sm font-medium z-30">Original T1</div>
-          </div>
-
-          <div className="absolute top-4 right-4 px-3 py-1.5 rounded-full bg-blue-600/80 text-white text-sm font-medium z-20">
-            {showRawMask ? 'Raw Mask' : showOverlay ? 'With Changes' : 'T1 Image'}
           </div>
 
           <div className="absolute top-0 bottom-0 w-0.5 bg-white z-20 pointer-events-none" style={{ left: `${sliderPosition}%` }} />

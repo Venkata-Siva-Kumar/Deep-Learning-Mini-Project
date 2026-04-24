@@ -123,14 +123,14 @@ function App() {
     }
 
     const normalizedArea = whitePixelCount / Math.max(totalPixels, 1);
-    const confidenceScore = whitePixelCount === 0
+    const accuracyScore = whitePixelCount === 0
       ? 40
       : Math.min(100, Math.max(50, Math.round(80 - Math.abs(0.12 - normalizedArea) * 100 + Math.min(10, buildingsDetected))));
 
     return {
       buildingsDetected,
       changesFound,
-      confidenceScore,
+      accuracyScore,
     };
   };
 
@@ -174,14 +174,19 @@ function App() {
       if (
         backendStats.buildingsDetected == null ||
         backendStats.changesFound == null ||
-        backendStats.confidenceScore == null
+        (backendStats.accuracyScore == null && backendStats.confidenceScore == null)
       ) {
         fallbackStats = await computeMaskStats(maskUrl);
       }
 
       const buildingsDetected = backendStats.buildingsDetected ?? fallbackStats?.buildingsDetected ?? 0;
       const changesFound = backendStats.changesFound ?? fallbackStats?.changesFound ?? 0;
-      const confidenceScore = backendStats.confidenceScore ?? fallbackStats?.confidenceScore ?? 40;
+      const accuracyScore =
+        backendStats.accuracyScore ??
+        backendStats.confidenceScore ??
+        fallbackStats?.accuracyScore ??
+        fallbackStats?.confidenceScore ??
+        40;
       
       setResult({
         t1Image: `${API_BASE_URL}/${data.before_image}`,
@@ -191,7 +196,7 @@ function App() {
         stats: {
           buildingsDetected,
           changesFound,
-          confidenceScore,
+          accuracyScore,
           processingTime,
         },
       });
@@ -359,13 +364,13 @@ function App() {
             <InfoCard
               icon={Layers}
               title="SCASN Model"
-              description="State-of-the-art deep learning architecture for accurate change detection"
+              description="Spatially and Contextually Aware Siamese Network  Deep Learning Architecture for Accurate Change Detection"
               color="purple"
             />
             <InfoCard
               icon={Zap}
               title="Fast Processing"
-              description="Get results in seconds with our optimized inference pipeline"
+              description="Get results instantly with our high-performance model optimization."
               color="green"
             />
           </motion.div>
@@ -376,7 +381,7 @@ function App() {
       <footer className="relative z-10 border-t border-white/10 py-8 px-4">
         <div className="max-w-7xl mx-auto text-center">
           <p className="text-gray-500 text-sm">
-            Powered by SCASN Deep Learning Model • Built for Research & Production Use
+            Powered by SCASN Deep Learning Model • Developed at SASTRA University for Academic Research
           </p>
         </div>
       </footer>

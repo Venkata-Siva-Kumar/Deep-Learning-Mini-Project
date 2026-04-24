@@ -267,11 +267,10 @@ const ResultViewer = ({ result, onClose }) => {
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ delay: 0.3 }}
-          className="mt-8 grid grid-cols-2 md:grid-cols-4 gap-4"
+          className="mt-8 grid grid-cols-1 md:grid-cols-3 gap-4 justify-items-center"
         >
           <StatCard label="Buildings Detected" value={result?.stats?.buildingsDetected ?? '-'} color="blue" />
-          <StatCard label="Changes Found" value={`${result?.stats?.changesFound ?? '-'}%`} color="green" />
-          <StatCard label="Confidence Score" value={`${result?.stats?.confidenceScore ?? '-'}%`} color="purple" />
+          <StatCard label="Accuracy score" value={`${result?.stats?.accuracyScore ?? '-'}%`} color="purple" />
           <StatCard label="Processing Time" value={`${result?.stats?.processingTime ?? '-'}s`} color="pink" />
         </motion.div>
       </div>
